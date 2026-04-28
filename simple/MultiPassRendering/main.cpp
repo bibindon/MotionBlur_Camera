@@ -69,6 +69,7 @@ static void RenderPass1();
 static void RenderPass2();
 static void DrawFullscreenQuad();
 static void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at);
+static float UpdateFps();
 static float Lerp(float a, float b, float t);
 static float SmoothStep(float t);
 
@@ -531,6 +532,11 @@ void RenderPass2()
     hResult = g_pEffect2->EndPass(); assert(hResult == S_OK);
     hResult = g_pEffect2->End();     assert(hResult == S_OK);
 
+    // Draw FPS after the post effect so it stays readable on the final image.
+    TCHAR fpsText[64];
+    _stprintf_s(fpsText, 64, _T("FPS: %.1f"), UpdateFps());
+    TextDraw(g_pFont, fpsText, 8, 8);
+
     hResult = g_pd3dDevice->EndScene();  assert(hResult == S_OK);
     hResult = g_pd3dDevice->Present(NULL, NULL, NULL, NULL); assert(hResult == S_OK);
 
@@ -613,6 +619,30 @@ void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
 
     const D3DXVECTOR3 forward(sinf(yaw), 0.0f, cosf(yaw));
     at = eye + forward;
+}
+
+float UpdateFps()
+{
+    static ULONGLONG s_prevTick = GetTickCount64();
+    static float s_fps = 0.0f;
+    static int s_frameCount = 0;
+    static float s_elapsedSeconds = 0.0f;
+
+    const ULONGLONG currentTick = GetTickCount64();
+    const float deltaSeconds = static_cast<float>(currentTick - s_prevTick) / 1000.0f;
+    s_prevTick = currentTick;
+
+    ++s_frameCount;
+    s_elapsedSeconds += deltaSeconds;
+
+    if (s_elapsedSeconds >= 0.5f)
+    {
+        s_fps = static_cast<float>(s_frameCount) / s_elapsedSeconds;
+        s_frameCount = 0;
+        s_elapsedSeconds = 0.0f;
+    }
+
+    return s_fps;
 }
 
 float Lerp(float a, float b, float t)

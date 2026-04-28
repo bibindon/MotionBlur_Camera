@@ -21,7 +21,6 @@ static const int kGridCountPerAxis = 10;
 static const float kGridSpacing = 10.0f;
 static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGridSpacing * 0.5f;
 static const float kCameraRotateDuration = 2.0f;
-static const float kCameraPauseDuration = 1.0f;
 static const float kCameraMoveDuration = 3.0f;
 static const float kCameraTravelDistance = 50.0f;
 
@@ -64,6 +63,7 @@ static void RenderPass1();
 static void RenderPass2();
 static void DrawFullscreenQuad();
 static void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at);
+static float Lerp(float a, float b, float t);
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -537,7 +537,6 @@ void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
 
     const float cycleDuration =
         kCameraRotateDuration +
-        kCameraPauseDuration +
         kCameraMoveDuration +
         kCameraRotateDuration +
         kCameraMoveDuration;
@@ -548,39 +547,45 @@ void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
         s_elapsed -= cycleDuration;
     }
 
-    const D3DXVECTOR3 startPos(0.0f, 5.0f, 0.0f);
-    float yaw = D3DX_PI;
-    float distance = 0.0f;
+    const D3DXVECTOR3 startPos(0.0f, 0.0f, 0.0f);
+    const float startYaw = 0.0f;
+    const float halfTurnYaw = D3DX_PI;
+    const D3DXVECTOR3 startForward(sinf(startYaw), 0.0f, cosf(startYaw));
+    const D3DXVECTOR3 halfTurnForward(sinf(halfTurnYaw), 0.0f, cosf(halfTurnYaw));
+    const D3DXVECTOR3 turnPoint = startPos + halfTurnForward * kCameraTravelDistance;
+
+    float yaw = startYaw;
     float time = s_elapsed;
 
     if (time < kCameraRotateDuration)
     {
-        yaw = D3DX_PI + D3DX_PI * (time / kCameraRotateDuration);
+        yaw = Lerp(startYaw, halfTurnYaw, time / kCameraRotateDuration);
+        eye = startPos;
     }
-    else if ((time -= kCameraRotateDuration) < kCameraPauseDuration)
+    else if ((time -= kCameraRotateDuration) < kCameraMoveDuration)
     {
-        yaw = D3DX_PI * 2.0f;
-    }
-    else if ((time -= kCameraPauseDuration) < kCameraMoveDuration)
-    {
-        yaw = D3DX_PI * 2.0f;
-        distance = kCameraTravelDistance * (time / kCameraMoveDuration);
+        yaw = halfTurnYaw;
+        eye = startPos + halfTurnForward * (kCameraTravelDistance * (time / kCameraMoveDuration));
     }
     else if ((time -= kCameraMoveDuration) < kCameraRotateDuration)
     {
-        yaw = D3DX_PI * 2.0f + D3DX_PI * (time / kCameraRotateDuration);
-        distance = kCameraTravelDistance;
+        yaw = Lerp(halfTurnYaw, startYaw, time / kCameraRotateDuration);
+        eye = turnPoint;
     }
     else
     {
         time -= kCameraRotateDuration;
-        yaw = D3DX_PI * 3.0f;
-        distance = kCameraTravelDistance * (1.0f - (time / kCameraMoveDuration));
+        yaw = startYaw;
+        eye = turnPoint + startForward * (kCameraTravelDistance * (time / kCameraMoveDuration));
     }
 
     const D3DXVECTOR3 forward(sinf(yaw), 0.0f, cosf(yaw));
-    eye = startPos + forward * distance;
     at = eye + forward;
+}
+
+float Lerp(float a, float b, float t)
+{
+    return a + (b - a) * t;
 }
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)

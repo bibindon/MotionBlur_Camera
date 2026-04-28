@@ -3,6 +3,7 @@ float4x4 g_matPrevViewProj;
 float g_fBlurScale = 2.0f;
 float g_fMaxBlurPixels = 24.0f;
 int g_iDebugViewMode = 0;
+int g_iMotionBlurEnabled = 1;
 float4 g_vTexelSize = { 1.0f / 1600.0f, 1.0f / 900.0f, 1600.0f, 900.0f };
 
 texture texture1;
@@ -121,6 +122,12 @@ void PixelShader1(in float2 inTexCoord : TEXCOORD0,
     }
 
     if (g_iDebugViewMode == 3)
+    {
+        outColor = tex2D(colorSampler, inTexCoord);
+        return;
+    }
+
+    if (g_iMotionBlurEnabled == 0)
     {
         outColor = tex2D(colorSampler, inTexCoord);
         return;

@@ -26,12 +26,13 @@ static const float kCameraRotateDuration = 4.0f;
 static const float kCameraMoveDuration = 6.0f;
 static const float kCameraTravelDistance = 50.0f;
 static const float kBlurScale = 2.0f;
-static const float kMaxBlurPixels = 24.0f;
+static const float kMaxBlurPixels = 240.0f;
 static const int kDebugViewMode = 0;
 
 LPDIRECT3D9 g_pD3D = NULL;
 LPDIRECT3DDEVICE9 g_pd3dDevice = NULL;
 LPD3DXFONT g_pFont = NULL;
+LPD3DXFONT g_pLargeFont = NULL;
 LPD3DXMESH g_pMesh = NULL;
 
 LPD3DXMESH g_pMeshSphere = NULL;
@@ -44,6 +45,7 @@ LPD3DXEFFECT g_pEffect2 = NULL;
 
 bool g_bClose = false;
 bool g_bHasPrevViewProj = false;
+bool g_bMotionBlurEnabled = true;
 bool g_bTimerPeriodChanged = false;
 
 // カメラモーションブラー用の行列を保持する。
@@ -64,7 +66,7 @@ struct QuadVertex
     float u, v;       // テクスチャ座標
 };
 
-static void TextDraw(LPD3DXFONT pFont, TCHAR* text, int X, int Y);
+static void TextDraw(LPD3DXFONT pFont, const TCHAR* text, int X, int Y, D3DCOLOR color);
 static void InitD3D(HWND hWnd);
 static void Cleanup();
 
@@ -166,7 +168,7 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
     return 0;
 }
 
-void TextDraw(LPD3DXFONT pFont, TCHAR* text, int X, int Y)
+void TextDraw(LPD3DXFONT pFont, const TCHAR* text, int X, int Y, D3DCOLOR color)
 {
     RECT rect = { X, Y, 0, 0 };
 
@@ -175,7 +177,7 @@ void TextDraw(LPD3DXFONT pFont, TCHAR* text, int X, int Y)
                                       -1,
                                       &rect,
                                       DT_LEFT | DT_NOCLIP,
-                                      D3DCOLOR_ARGB(255, 0, 0, 0));
+                                      color);
 
     assert((int)hResult >= 0);
 }
@@ -232,6 +234,20 @@ void InitD3D(HWND hWnd)
                              FF_DONTCARE,
                              _T("ＭＳ ゴシック"),
                              &g_pFont);
+    assert(hResult == S_OK);
+
+    hResult = D3DXCreateFont(g_pd3dDevice,
+                             56,
+                             0,
+                             FW_HEAVY,
+                             1,
+                             FALSE,
+                             SHIFTJIS_CHARSET,
+                             OUT_TT_ONLY_PRECIS,
+                             CLEARTYPE_NATURAL_QUALITY,
+                             FF_DONTCARE,
+                             _T("ＭＳ ゴシック"),
+                             &g_pLargeFont);
     assert(hResult == S_OK);
 
     LPD3DXBUFFER pD3DXMtrlBuffer = NULL;
@@ -358,6 +374,7 @@ void Cleanup()
     SAFE_RELEASE(g_pMeshSphere);
     SAFE_RELEASE(g_pEffect1);
     SAFE_RELEASE(g_pEffect2);
+    SAFE_RELEASE(g_pLargeFont);
     SAFE_RELEASE(g_pFont);
 
     // 追加: 解放漏れ防止
@@ -444,7 +461,7 @@ void RenderPass1()
     // タイトル
     TCHAR msg[100];
     _tcscpy_s(msg, 100, _T("Camera Motion Blur Prep"));
-    TextDraw(g_pFont, msg, 0, 0);
+    TextDraw(g_pFont, msg, 0, 0, D3DCOLOR_ARGB(255, 0, 0, 0));
 
     // === 変更: MRT 用テクニックを使用 ===
     hResult = g_pEffect1->SetTechnique("TechniqueMRT");
@@ -535,6 +552,7 @@ void RenderPass2()
     hResult = g_pEffect2->SetFloat("g_fMaxBlurPixels", kMaxBlurPixels);              assert(hResult == S_OK);
     hResult = g_pEffect2->SetVector("g_vTexelSize", &texelSize);                     assert(hResult == S_OK);
     hResult = g_pEffect2->SetInt("g_iDebugViewMode", kDebugViewMode);                assert(hResult == S_OK);
+    hResult = g_pEffect2->SetInt("g_iMotionBlurEnabled", g_bMotionBlurEnabled ? 1 : 0); assert(hResult == S_OK);
     hResult = g_pEffect2->CommitChanges();                                            assert(hResult == S_OK);
 
     DrawFullscreenQuad();
@@ -545,7 +563,19 @@ void RenderPass2()
     // Draw FPS after the post effect so it stays readable on the final image.
     TCHAR fpsText[64];
     _stprintf_s(fpsText, 64, _T("FPS: %.1f"), UpdateFps());
-    TextDraw(g_pFont, fpsText, 8, 8);
+    TextDraw(g_pFont, fpsText, 8, 8, D3DCOLOR_ARGB(255, 255, 255, 255));
+
+    TextDraw(g_pFont,
+             _T("Press 1: Motion Blur ON/OFF"),
+             8,
+             36,
+             D3DCOLOR_ARGB(255, 255, 255, 255));
+
+    TextDraw(g_pLargeFont,
+             g_bMotionBlurEnabled ? _T("MOTION BLUR: ON") : _T("MOTION BLUR: OFF"),
+             8,
+             64,
+             g_bMotionBlurEnabled ? D3DCOLOR_ARGB(255, 0, 255, 0) : D3DCOLOR_ARGB(255, 255, 0, 0));
 
     hResult = g_pd3dDevice->EndScene();  assert(hResult == S_OK);
     hResult = g_pd3dDevice->Present(NULL, NULL, NULL, NULL); assert(hResult == S_OK);
@@ -678,6 +708,16 @@ LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+    case WM_KEYDOWN:
+    {
+        if (wParam == '1')
+        {
+            g_bMotionBlurEnabled = !g_bMotionBlurEnabled;
+            return 0;
+        }
+        break;
+    }
+
     case WM_DESTROY:
     {
         PostQuitMessage(0);

@@ -23,6 +23,9 @@ static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGrid
 static const float kCameraRotateDuration = 4.0f;
 static const float kCameraMoveDuration = 6.0f;
 static const float kCameraTravelDistance = 50.0f;
+static const float kBlurScale = 2.0f;
+static const float kMaxBlurPixels = 24.0f;
+static const int kDebugViewMode = 0;
 
 LPDIRECT3D9 g_pD3D = NULL;
 LPDIRECT3DDEVICE9 g_pd3dDevice = NULL;
@@ -38,6 +41,12 @@ LPD3DXEFFECT g_pEffect1 = NULL;
 LPD3DXEFFECT g_pEffect2 = NULL;
 
 bool g_bClose = false;
+bool g_bHasPrevViewProj = false;
+
+// カメラモーションブラー用の行列を保持する。
+D3DXMATRIX g_matCurrentViewProj;
+D3DXMATRIX g_matPrevViewProj;
+D3DXMATRIX g_matInvCurrentViewProj;
 
 // === 変更: RT を 2 枚用意 ===
 LPDIRECT3DTEXTURE9 g_pRenderTarget = NULL;
@@ -45,9 +54,6 @@ LPDIRECT3DTEXTURE9 g_pRenderTarget2 = NULL;
 
 // フルスクリーンクアッド用
 LPDIRECT3DVERTEXDECLARATION9 g_pQuadDecl = NULL;
-
-// 追加: スプライト
-LPD3DXSPRITE g_pSprite = NULL;
 
 struct QuadVertex
 {
@@ -324,9 +330,10 @@ void InitD3D(HWND hWnd)
     hResult = g_pd3dDevice->CreateVertexDeclaration(elems, &g_pQuadDecl);
     assert(hResult == S_OK);
 
-    // スプライト
-    hResult = D3DXCreateSprite(g_pd3dDevice, &g_pSprite);
-    assert(hResult == S_OK);
+    // 初回フレームで未初期化行列を使わないように単位行列を入れておく。
+    D3DXMatrixIdentity(&g_matCurrentViewProj);
+    D3DXMatrixIdentity(&g_matPrevViewProj);
+    D3DXMatrixIdentity(&g_matInvCurrentViewProj);
 }
 
 void Cleanup()
@@ -346,8 +353,6 @@ void Cleanup()
     SAFE_RELEASE(g_pRenderTarget);
     SAFE_RELEASE(g_pRenderTarget2);
     SAFE_RELEASE(g_pQuadDecl);
-    SAFE_RELEASE(g_pSprite);
-
     SAFE_RELEASE(g_pd3dDevice);
     SAFE_RELEASE(g_pD3D);
 }
@@ -367,6 +372,22 @@ void RenderPass1()
     hResult = g_pRenderTarget->GetSurfaceLevel(0, &pRT0);  assert(hResult == S_OK);
     hResult = g_pRenderTarget2->GetSurfaceLevel(0, &pRT1); assert(hResult == S_OK);
 
+    // Color RT and depth RT are cleared separately so the depth background stays far.
+    hResult = g_pd3dDevice->SetRenderTarget(0, pRT0); assert(hResult == S_OK);
+    hResult = g_pd3dDevice->SetRenderTarget(1, NULL); assert(hResult == S_OK);
+    hResult = g_pd3dDevice->Clear(0, NULL,
+                                  D3DCLEAR_TARGET,
+                                  D3DCOLOR_XRGB(100, 100, 100),
+                                  1.0f, 0);
+    assert(hResult == S_OK);
+
+    hResult = g_pd3dDevice->SetRenderTarget(0, pRT1); assert(hResult == S_OK);
+    hResult = g_pd3dDevice->Clear(0, NULL,
+                                  D3DCLEAR_TARGET,
+                                  D3DCOLOR_XRGB(255, 255, 255),
+                                  1.0f, 0);
+    assert(hResult == S_OK);
+
     // MRT セット（スロット 0 と 1）
     hResult = g_pd3dDevice->SetRenderTarget(0, pRT0); assert(hResult == S_OK);
     hResult = g_pd3dDevice->SetRenderTarget(1, pRT1); assert(hResult == S_OK);
@@ -385,9 +406,25 @@ void RenderPass1()
     UpdateCamera(eye, at);
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
 
+    // 現在フレームの ViewProjection とその逆行列を更新する。
+    g_matCurrentViewProj = View * Proj;
+
+    D3DXMATRIX matIdentity;
+    D3DXMatrixIdentity(&matIdentity);
+    if (D3DXMatrixInverse(&g_matInvCurrentViewProj, NULL, &g_matCurrentViewProj) == NULL)
+    {
+        g_matInvCurrentViewProj = matIdentity;
+    }
+
+    // 初回フレームは prev=current にして velocity を 0 にする。
+    if (!g_bHasPrevViewProj)
+    {
+        g_matPrevViewProj = g_matCurrentViewProj;
+    }
+
     hResult = g_pd3dDevice->Clear(0, NULL,
-                                  D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
-                                  D3DCOLOR_XRGB(100, 100, 100),
+                                  D3DCLEAR_ZBUFFER,
+                                  D3DCOLOR_XRGB(0, 0, 0),
                                   1.0f, 0);
     assert(hResult == S_OK);
 
@@ -421,7 +458,7 @@ void RenderPass1()
                 const float z = iz * kGridSpacing - kGridOriginOffset;
 
                 D3DXMatrixTranslation(&world, x, y, z);
-                worldViewProj = world * View * Proj;
+                worldViewProj = world * g_matCurrentViewProj;
 
                 hResult = g_pEffect1->SetMatrix("g_matWorldViewProj", &worldViewProj);
                 assert(hResult == S_OK);
@@ -473,34 +510,33 @@ void RenderPass2()
     hResult = g_pEffect2->Begin(&numPass, 0);               assert(hResult == S_OK);
     hResult = g_pEffect2->BeginPass(0);                     assert(hResult == S_OK);
 
-    hResult = g_pEffect2->SetTexture("texture1", g_pRenderTarget); assert(hResult == S_OK);
-    hResult = g_pEffect2->CommitChanges();                          assert(hResult == S_OK);
+    // ポストエフェクト側へカラー、深度、行列、調整定数を渡す。
+    D3DXVECTOR4 texelSize(1.0f / static_cast<float>(kScreenWidth),
+                          1.0f / static_cast<float>(kScreenHeight),
+                          static_cast<float>(kScreenWidth),
+                          static_cast<float>(kScreenHeight));
+
+    hResult = g_pEffect2->SetTexture("texture1", g_pRenderTarget);                   assert(hResult == S_OK);
+    hResult = g_pEffect2->SetTexture("depthTexture", g_pRenderTarget2);              assert(hResult == S_OK);
+    hResult = g_pEffect2->SetMatrix("g_matInvCurrentViewProj", &g_matInvCurrentViewProj); assert(hResult == S_OK);
+    hResult = g_pEffect2->SetMatrix("g_matPrevViewProj", &g_matPrevViewProj);        assert(hResult == S_OK);
+    hResult = g_pEffect2->SetFloat("g_fBlurScale", kBlurScale);                      assert(hResult == S_OK);
+    hResult = g_pEffect2->SetFloat("g_fMaxBlurPixels", kMaxBlurPixels);              assert(hResult == S_OK);
+    hResult = g_pEffect2->SetVector("g_vTexelSize", &texelSize);                     assert(hResult == S_OK);
+    hResult = g_pEffect2->SetInt("g_iDebugViewMode", kDebugViewMode);                assert(hResult == S_OK);
+    hResult = g_pEffect2->CommitChanges();                                            assert(hResult == S_OK);
 
     DrawFullscreenQuad();
 
     hResult = g_pEffect2->EndPass(); assert(hResult == S_OK);
     hResult = g_pEffect2->End();     assert(hResult == S_OK);
 
-    // === 追加: 左上に RT1 を 1/2 スケールで表示（D3DXSPRITE） ===
-    if (g_pSprite)
-    {
-        hResult = g_pSprite->Begin(D3DXSPRITE_ALPHABLEND);  assert(hResult == S_OK);
-
-        D3DXMATRIX mat;
-        D3DXVECTOR2 scaling(0.5f, 0.5f);     // 半分
-        D3DXVECTOR2 trans(0.0f, 0.0f);       // 左上
-        D3DXMatrixTransformation2D(&mat, NULL, 0.0f, &scaling, NULL, 0.0f, &trans);
-        g_pSprite->SetTransform(&mat);
-
-        // そのまま (0,0) へ描画
-        hResult = g_pSprite->Draw(g_pRenderTarget2, NULL, NULL, NULL, 0xFFFFFFFF);
-        assert(hResult == S_OK);
-
-        hResult = g_pSprite->End(); assert(hResult == S_OK);
-    }
-
     hResult = g_pd3dDevice->EndScene();  assert(hResult == S_OK);
     hResult = g_pd3dDevice->Present(NULL, NULL, NULL, NULL); assert(hResult == S_OK);
+
+    // 1フレームの描画完了後に prev=current へ更新する。
+    g_matPrevViewProj = g_matCurrentViewProj;
+    g_bHasPrevViewProj = true;
 
     hResult = g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
     assert(hResult == S_OK);

@@ -1,56 +1,132 @@
-float4x4 g_matWorldViewProj;
-float4 g_lightNormal = { 0.3f, 1.0f, 0.5f, 0.0f };
-float3 g_ambient = { 0.3f, 0.3f, 0.3f };
-
-bool g_bUseTexture = true;
+float4x4 g_matInvCurrentViewProj;
+float4x4 g_matPrevViewProj;
+float g_fBlurScale = 2.0f;
+float g_fMaxBlurPixels = 24.0f;
+int g_iDebugViewMode = 0;
+float4 g_vTexelSize = { 1.0f / 1600.0f, 1.0f / 900.0f, 1600.0f, 900.0f };
 
 texture texture1;
-sampler textureSampler = sampler_state {
+sampler colorSampler = sampler_state
+{
     Texture = (texture1);
-    MipFilter = NONE;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+};
+
+texture depthTexture;
+sampler depthSampler = sampler_state
+{
+    Texture = (depthTexture);
     MinFilter = POINT;
     MagFilter = POINT;
+    MipFilter = NONE;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
 };
 
 void VertexShader1(in  float4 inPosition  : POSITION,
-                   in  float2 inTexCood   : TEXCOORD0,
-
+                   in  float2 inTexCoord  : TEXCOORD0,
                    out float4 outPosition : POSITION,
-                   out float2 outTexCood  : TEXCOORD0)
+                   out float2 outTexCoord : TEXCOORD0)
 {
     outPosition = inPosition;
-    outTexCood = inTexCood;
+    outTexCoord = inTexCoord;
 }
 
-void PixelShader1(in float4 inPosition    : POSITION,
-                  in float2 inTexCood     : TEXCOORD0,
-
-                  out float4 outColor     : COLOR)
+float2 GetPrevUv(float2 uv, float depth)
 {
-    float4 workColor = (float4)0;
-    workColor = tex2D(textureSampler, inTexCood);
+    // 現在フレームの UV と深度から近似的にワールド座標を復元する。
+    float4 currentClip;
+    currentClip.x = uv.x * 2.0f - 1.0f;
+    currentClip.y = (1.0f - uv.y) * 2.0f - 1.0f;
+    currentClip.z = depth;
+    currentClip.w = 1.0f;
 
-    //float average = (workColor.r + workColor.g + workColor.b) / 3;
-    float average = workColor.r * 0.2 + workColor.g * 0.7 + workColor.b * 0.1;
+    float4 worldPos = mul(currentClip, g_matInvCurrentViewProj);
+    float invWorldW = 1.0f / max(abs(worldPos.w), 0.0001f);
+    worldPos *= invWorldW;
 
-    // 試しに彩度を上げたり下げたりしてみる
-    if (true)
+    // 前フレームの ViewProjection へ投影し直して前回 UV を求める。
+    float4 prevClip = mul(worldPos, g_matPrevViewProj);
+    float invPrevW = 1.0f / max(abs(prevClip.w), 0.0001f);
+    prevClip *= invPrevW;
+
+    float2 prevUv;
+    prevUv.x = prevClip.x * 0.5f + 0.5f;
+    prevUv.y = (1.0f - prevClip.y) * 0.5f;
+    return prevUv;
+}
+
+float2 GetVelocity(float2 uv, float depth)
+{
+    float2 prevUv = GetPrevUv(uv, depth);
+    float2 velocity = (uv - prevUv) * g_fBlurScale;
+
+    // Clamp in pixels so the limit means the same thing at any screen size.
+    float2 velocityPixels;
+    velocityPixels.x = velocity.x / g_vTexelSize.x;
+    velocityPixels.y = velocity.y / g_vTexelSize.y;
+
+    float velocityPixelLength = length(velocityPixels);
+    if (velocityPixelLength > g_fMaxBlurPixels)
     {
-        workColor.r += (workColor.r - average);
-        workColor.g += (workColor.g - average);
-        workColor.b += (workColor.b - average);
+        velocityPixels *= g_fMaxBlurPixels / velocityPixelLength;
+        velocity.x = velocityPixels.x * g_vTexelSize.x;
+        velocity.y = velocityPixels.y * g_vTexelSize.y;
     }
-    else
+
+    return velocity;
+}
+
+float4 SampleMotionBlur(float2 uv, float2 velocity)
+{
+    // 現在位置から過去方向へ 8 サンプル取って平均する。
+    float4 accumColor = 0.0f;
+    const int sampleCount = 8;
+
+    [unroll]
+    for (int i = 0; i < sampleCount; ++i)
     {
-        workColor.r -= (workColor.r - average) / 2.f;
-        workColor.g -= (workColor.g - average) / 2.f;
-        workColor.b -= (workColor.b - average) / 2.f;
+        float t = (float)i / (float)(sampleCount - 1);
+        float2 sampleUv = uv - velocity * t;
+        accumColor += tex2D(colorSampler, sampleUv);
     }
 
-    workColor = saturate(workColor);
+    return accumColor / (float)sampleCount;
+}
 
-    outColor = workColor;
-    
+void PixelShader1(in float2 inTexCoord : TEXCOORD0,
+                  out float4 outColor  : COLOR0)
+{
+    float depth = tex2D(depthSampler, inTexCoord).r;
+    float2 velocity = GetVelocity(inTexCoord, depth);
+
+    if (g_iDebugViewMode == 1)
+    {
+        outColor = float4(depth, depth, depth, 1.0f);
+        return;
+    }
+
+    if (g_iDebugViewMode == 2)
+    {
+        float2 velocityVis = velocity * 4.0f;
+        outColor = float4(velocityVis.x * 0.5f + 0.5f,
+                          velocityVis.y * 0.5f + 0.5f,
+                          0.5f,
+                          1.0f);
+        return;
+    }
+
+    if (g_iDebugViewMode == 3)
+    {
+        outColor = tex2D(colorSampler, inTexCoord);
+        return;
+    }
+
+    outColor = SampleMotionBlur(inTexCoord, velocity);
 }
 
 technique Technique1
@@ -58,8 +134,7 @@ technique Technique1
     pass Pass1
     {
         CullMode = NONE;
-
         VertexShader = compile vs_3_0 VertexShader1();
         PixelShader = compile ps_3_0 PixelShader1();
-   }
+    }
 }

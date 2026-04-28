@@ -1,4 +1,5 @@
 ﻿#pragma comment( lib, "d3d9.lib" )
+#pragma comment( lib, "winmm.lib" )
 #if defined(DEBUG) || defined(_DEBUG)
 #pragma comment( lib, "d3dx9d.lib" )
 #else
@@ -7,6 +8,7 @@
 
 #include <d3d9.h>
 #include <d3dx9.h>
+#include <mmsystem.h>
 #include <string>
 #include <tchar.h>
 #include <cassert>
@@ -42,6 +44,7 @@ LPD3DXEFFECT g_pEffect2 = NULL;
 
 bool g_bClose = false;
 bool g_bHasPrevViewProj = false;
+bool g_bTimerPeriodChanged = false;
 
 // カメラモーションブラー用の行列を保持する。
 D3DXMATRIX g_matCurrentViewProj;
@@ -86,6 +89,8 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
                      _In_ int nCmdShow)
 {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+    // Improve Sleep timing precision while this sample is running.
+    g_bTimerPeriodChanged = (timeBeginPeriod(1) == TIMERR_NOERROR);
 
     WNDCLASSEX wc { };
     wc.cbSize = sizeof(WNDCLASSEX);
@@ -151,6 +156,11 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
     }
 
     Cleanup();
+
+    if (g_bTimerPeriodChanged)
+    {
+        timeEndPeriod(1);
+    }
 
     UnregisterClass(_T("Window1"), wc.hInstance);
     return 0;

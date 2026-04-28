@@ -8,9 +8,9 @@ texture texture1;
 sampler textureSampler = sampler_state
 {
     Texture = (texture1);
-    MipFilter = LINEAR;
-    MinFilter = LINEAR;
-    MagFilter = LINEAR;
+    MipFilter = NONE;
+    MinFilter = NONE;
+    MagFilter = NONE;
 };
 
 // ▼ 頂点シェーダー：clip空間の z/w を 0..1 にして渡す（非線形だが追加定数なしで簡単）

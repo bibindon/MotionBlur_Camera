@@ -17,7 +17,7 @@
 
 static const UINT kScreenWidth = 1600;
 static const UINT kScreenHeight = 900;
-static const int kGridCountPerAxis = 10;
+static const int kGridCountPerAxis = 6;
 static const float kGridSpacing = 10.0f;
 static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGridSpacing * 0.5f;
 static const float kCameraRotateDuration = 4.0f;
@@ -190,7 +190,7 @@ void InitD3D(HWND hWnd)
     d3dpp.hDeviceWindow = hWnd;
     d3dpp.Flags = 0;
     d3dpp.FullScreen_RefreshRateInHz = D3DPRESENT_RATE_DEFAULT;
-    d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
+    d3dpp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
 
     hResult = g_pD3D->CreateDevice(D3DADAPTER_DEFAULT,
                                    D3DDEVTYPE_HAL,

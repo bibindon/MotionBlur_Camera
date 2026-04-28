@@ -9,9 +9,9 @@ texture texture1;
 sampler colorSampler = sampler_state
 {
     Texture = (texture1);
-    MinFilter = LINEAR;
-    MagFilter = LINEAR;
-    MipFilter = LINEAR;
+    MinFilter = NONE;
+    MagFilter = NONE;
+    MipFilter = NONE;
     AddressU = CLAMP;
     AddressV = CLAMP;
 };

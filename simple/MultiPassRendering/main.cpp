@@ -15,6 +15,16 @@
 
 #define SAFE_RELEASE(p) { if (p) { (p)->Release(); (p) = NULL; } }
 
+static const UINT kScreenWidth = 1600;
+static const UINT kScreenHeight = 900;
+static const int kGridCountPerAxis = 10;
+static const float kGridSpacing = 10.0f;
+static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGridSpacing * 0.5f;
+static const float kCameraRotateDuration = 2.0f;
+static const float kCameraPauseDuration = 1.0f;
+static const float kCameraMoveDuration = 3.0f;
+static const float kCameraTravelDistance = 50.0f;
+
 LPDIRECT3D9 g_pD3D = NULL;
 LPDIRECT3DDEVICE9 g_pd3dDevice = NULL;
 LPD3DXFONT g_pFont = NULL;
@@ -53,6 +63,7 @@ static void Cleanup();
 static void RenderPass1();
 static void RenderPass2();
 static void DrawFullscreenQuad();
+static void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at);
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -86,7 +97,7 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
     assert(atom != 0);
 
     RECT rect;
-    SetRect(&rect, 0, 0, 640, 480);
+    SetRect(&rect, 0, 0, kScreenWidth, kScreenHeight);
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
     rect.right = rect.right - rect.left;
     rect.bottom = rect.bottom - rect.top;
@@ -285,7 +296,7 @@ void InitD3D(HWND hWnd)
 
     // === 変更: RT を 2 枚作成（両方 A8R8G8B8） ===
     hResult = D3DXCreateTexture(g_pd3dDevice,
-                                640, 480,
+                                kScreenWidth, kScreenHeight,
                                 1,
                                 D3DUSAGE_RENDERTARGET,
                                 D3DFMT_A8R8G8B8,
@@ -294,7 +305,7 @@ void InitD3D(HWND hWnd)
     assert(hResult == S_OK);
 
     hResult = D3DXCreateTexture(g_pd3dDevice,
-                                640, 480,
+                                kScreenWidth, kScreenHeight,
                                 1,
                                 D3DUSAGE_RENDERTARGET,
                                 D3DFMT_A8R8G8B8,
@@ -359,27 +370,19 @@ void RenderPass1()
     hResult = g_pd3dDevice->SetRenderTarget(0, pRT0); assert(hResult == S_OK);
     hResult = g_pd3dDevice->SetRenderTarget(1, pRT1); assert(hResult == S_OK);
 
-    static float f = 0.0f;
-    f += 0.025f;
-
-    D3DXMATRIX mat;
     D3DXMATRIX View, Proj;
 
     D3DXMatrixPerspectiveFovLH(&Proj,
-                               D3DXToRadian(45),
-                               640.0f / 480.0f,
+                               D3DXToRadian(60.0f),
+                               static_cast<float>(kScreenWidth) / static_cast<float>(kScreenHeight),
                                1.0f,
                                10000.0f);
 
-    D3DXVECTOR3 eye(10 * sinf(f), 5, -10 * cosf(f));
-    D3DXVECTOR3 at(0, 0, 0);
-    D3DXVECTOR3 up(0, 1, 0);
+    D3DXVECTOR3 eye;
+    D3DXVECTOR3 at;
+    D3DXVECTOR3 up(0.0f, 1.0f, 0.0f);
+    UpdateCamera(eye, at);
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
-    D3DXMatrixIdentity(&mat);
-    mat = mat * View * Proj;
-
-    hResult = g_pEffect1->SetMatrix("g_matWorldViewProj", &mat);
-    assert(hResult == S_OK);
 
     hResult = g_pd3dDevice->Clear(0, NULL,
                                   D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
@@ -391,7 +394,7 @@ void RenderPass1()
 
     // タイトル
     TCHAR msg[100];
-    _tcscpy_s(msg, 100, _T("SSAOに挑戦"));
+    _tcscpy_s(msg, 100, _T("Camera Motion Blur Prep"));
     TextDraw(g_pFont, msg, 0, 0);
 
     // === 変更: MRT 用テクニックを使用 ===
@@ -402,21 +405,34 @@ void RenderPass1()
     hResult = g_pEffect1->Begin(&numPass, 0); assert(hResult == S_OK);
     hResult = g_pEffect1->BeginPass(0);       assert(hResult == S_OK);
 
-    // メッシュ（テクスチャあり）
+    // 10m 間隔で 10x10x10 個並べたモデル群
     hResult = g_pEffect1->SetBool("g_bUseTexture", TRUE); assert(hResult == S_OK);
-    for (DWORD i = 0; i < g_dwNumMaterials; i++)
+    for (int ix = 0; ix < kGridCountPerAxis; ++ix)
     {
-        hResult = g_pEffect1->SetTexture("texture1", g_pTextures[i]); assert(hResult == S_OK);
-        hResult = g_pEffect1->CommitChanges();                         assert(hResult == S_OK);
-        hResult = g_pMesh->DrawSubset(i);                              assert(hResult == S_OK);
-    }
+        for (int iy = 0; iy < kGridCountPerAxis; ++iy)
+        {
+            for (int iz = 0; iz < kGridCountPerAxis; ++iz)
+            {
+                D3DXMATRIX world;
+                D3DXMATRIX worldViewProj;
+                const float x = ix * kGridSpacing - kGridOriginOffset;
+                const float y = iy * kGridSpacing - kGridOriginOffset;
+                const float z = iz * kGridSpacing - kGridOriginOffset;
 
-    // 球（テクスチャなし）
-    {
-        hResult = g_pEffect1->SetBool("g_bUseTexture", FALSE); assert(hResult == S_OK);
-        hResult = g_pEffect1->SetTexture("texture1", NULL);    assert(hResult == S_OK);
-        hResult = g_pEffect1->CommitChanges();                 assert(hResult == S_OK);
-        hResult = g_pMeshSphere->DrawSubset(0);                assert(hResult == S_OK);
+                D3DXMatrixTranslation(&world, x, y, z);
+                worldViewProj = world * View * Proj;
+
+                hResult = g_pEffect1->SetMatrix("g_matWorldViewProj", &worldViewProj);
+                assert(hResult == S_OK);
+
+                for (DWORD i = 0; i < g_dwNumMaterials; i++)
+                {
+                    hResult = g_pEffect1->SetTexture("texture1", g_pTextures[i]); assert(hResult == S_OK);
+                    hResult = g_pEffect1->CommitChanges();                         assert(hResult == S_OK);
+                    hResult = g_pMesh->DrawSubset(i);                              assert(hResult == S_OK);
+                }
+            }
+        }
     }
 
     hResult = g_pEffect1->EndPass(); assert(hResult == S_OK);
@@ -493,8 +509,8 @@ void DrawFullscreenQuad()
 {
     QuadVertex v[4] { };
 
-    float du = 0.5f / 640.f;
-    float dv = 0.5f / 480.f;
+    float du = 0.5f / static_cast<float>(kScreenWidth);
+    float dv = 0.5f / static_cast<float>(kScreenHeight);
 
     v[0].x = -1.0f; v[0].y = -1.0f; v[0].z = 0.0f; v[0].w = 1.0f; v[0].u = 0.0f + du; v[0].v = 1.0f - dv;
     v[1].x = -1.0f; v[1].y = 1.0f; v[1].z = 0.0f; v[1].w = 1.0f; v[1].u = 0.0f + du; v[1].v = 0.0f + dv;
@@ -503,6 +519,68 @@ void DrawFullscreenQuad()
 
     g_pd3dDevice->SetVertexDeclaration(g_pQuadDecl);
     g_pd3dDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(QuadVertex));
+}
+
+void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
+{
+    static ULONGLONG s_prevTick = GetTickCount64();
+    static float s_elapsed = 0.0f;
+
+    const ULONGLONG currentTick = GetTickCount64();
+    float deltaSeconds = static_cast<float>(currentTick - s_prevTick) / 1000.0f;
+    s_prevTick = currentTick;
+
+    if (deltaSeconds > 0.1f)
+    {
+        deltaSeconds = 0.1f;
+    }
+
+    const float cycleDuration =
+        kCameraRotateDuration +
+        kCameraPauseDuration +
+        kCameraMoveDuration +
+        kCameraRotateDuration +
+        kCameraMoveDuration;
+
+    s_elapsed += deltaSeconds;
+    while (s_elapsed >= cycleDuration)
+    {
+        s_elapsed -= cycleDuration;
+    }
+
+    const D3DXVECTOR3 startPos(0.0f, 5.0f, 0.0f);
+    float yaw = D3DX_PI;
+    float distance = 0.0f;
+    float time = s_elapsed;
+
+    if (time < kCameraRotateDuration)
+    {
+        yaw = D3DX_PI + D3DX_PI * (time / kCameraRotateDuration);
+    }
+    else if ((time -= kCameraRotateDuration) < kCameraPauseDuration)
+    {
+        yaw = D3DX_PI * 2.0f;
+    }
+    else if ((time -= kCameraPauseDuration) < kCameraMoveDuration)
+    {
+        yaw = D3DX_PI * 2.0f;
+        distance = kCameraTravelDistance * (time / kCameraMoveDuration);
+    }
+    else if ((time -= kCameraMoveDuration) < kCameraRotateDuration)
+    {
+        yaw = D3DX_PI * 2.0f + D3DX_PI * (time / kCameraRotateDuration);
+        distance = kCameraTravelDistance;
+    }
+    else
+    {
+        time -= kCameraRotateDuration;
+        yaw = D3DX_PI * 3.0f;
+        distance = kCameraTravelDistance * (1.0f - (time / kCameraMoveDuration));
+    }
+
+    const D3DXVECTOR3 forward(sinf(yaw), 0.0f, cosf(yaw));
+    eye = startPos + forward * distance;
+    at = eye + forward;
 }
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)

@@ -94,23 +94,19 @@ float2 GetVelocity(float2 uv, float depth)
 
 float4 SampleMotionBlur(float2 uv, float2 velocity)
 {
-    // Gather 21 samples along the motion direction and blend them with Gaussian weights.
+    // Gather 21 samples along the motion direction and average them evenly.
     float4 accumColor = 0.0f;
-    float accumWeight = 0.0f;
     const int sampleCount = 21;
-    const float sigma = 0.35f;
 
     [unroll]
     for (int i = 0; i < sampleCount; ++i)
     {
         float t = ((float)i / (float)(sampleCount - 1)) * 2.0f - 1.0f;
-        float weight = exp(-(t * t) / (2.0f * sigma * sigma));
         float2 sampleUv = saturate(uv - velocity * t);
-        accumColor += tex2D(colorLinearSampler, sampleUv) * weight;
-        accumWeight += weight;
+        accumColor += tex2D(colorLinearSampler, sampleUv);
     }
 
-    return accumColor / max(accumWeight, 0.0001f);
+    return accumColor / (float)sampleCount;
 }
 
 void PixelShader1(in float2 inTexCoord : TEXCOORD0,

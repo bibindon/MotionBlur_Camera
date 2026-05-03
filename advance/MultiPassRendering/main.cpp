@@ -27,9 +27,11 @@ static const float kCameraMouseSensitivity = 0.0025f;
 static const float kCameraPitchLimit = D3DX_PI * 0.49f;
 static const float kMotionVectorFrameSeconds = 1.0f / 60.0f;
 static const float kBlurScale = 2.0f;
-static const float kMaxBlurPixels = 120.0f;
+static const float kMaxBlurPixels = 240.0f;
 static const int kDebugViewMode = 0;
 static const float kBackdropCubeSize = 200.0f;
+static const float kMotionBlurTranslationThreshold = 0.001f;
+static const float kMotionBlurRotationThreshold = 0.01f;
 
 HWND g_hWnd = NULL;
 LPDIRECT3D9 g_pD3D = NULL;
@@ -51,6 +53,7 @@ LPD3DXEFFECT g_pEffect2 = NULL;
 bool g_bClose = false;
 bool g_bHasPrevViewProj = false;
 bool g_bMotionBlurEnabled = true;
+bool g_bApplyMotionBlurThisFrame = true;
 bool g_bTimerPeriodChanged = false;
 bool g_bCameraMouseReady = false;
 
@@ -640,7 +643,9 @@ void RenderPass2()
     hResult = g_pEffect2->SetFloat("g_fMaxBlurPixels", kMaxBlurPixels);              assert(hResult == S_OK);
     hResult = g_pEffect2->SetVector("g_vTexelSize", &texelSize);                     assert(hResult == S_OK);
     hResult = g_pEffect2->SetInt("g_iDebugViewMode", kDebugViewMode);                assert(hResult == S_OK);
-    hResult = g_pEffect2->SetInt("g_iMotionBlurEnabled", g_bMotionBlurEnabled ? 1 : 0); assert(hResult == S_OK);
+    hResult = g_pEffect2->SetInt("g_iMotionBlurEnabled",
+                                 (g_bMotionBlurEnabled && g_bApplyMotionBlurThisFrame) ? 1 : 0);
+    assert(hResult == S_OK);
     hResult = g_pEffect2->CommitChanges();                                            assert(hResult == S_OK);
 
     DrawFullscreenQuad();
@@ -788,6 +793,12 @@ void UpdateCamera(D3DXVECTOR3& eye,
     const D3DXVECTOR3 motionVector = g_vCameraEye - oldCameraEye;
     const float yawMotion = g_fCameraYaw - oldCameraYaw;
     const float pitchMotion = g_fCameraPitch - oldCameraPitch;
+    const float translationMotion = D3DXVec3Length(&motionVector);
+    const float rotationMotion = max(fabsf(yawMotion), fabsf(pitchMotion));
+
+    g_bApplyMotionBlurThisFrame =
+        (translationMotion > kMotionBlurTranslationThreshold) ||
+        (rotationMotion > kMotionBlurRotationThreshold);
 
     eye = g_vCameraEye;
     prevEye = g_vCameraEye - motionVector * motionScale;

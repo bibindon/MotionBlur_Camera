@@ -34,6 +34,7 @@ static const int kDebugViewMode = 0;
 static const float kBackdropCubeSize = 200.0f;
 static const float kMotionBlurTranslationThreshold = 0.001f;
 static const float kMotionBlurRotationThreshold = 0.01f;
+static const float kRotationOnlyBlurScale = 0.3f;
 
 HWND g_hWnd = NULL;
 LPDIRECT3D9 g_pD3D = NULL;
@@ -56,6 +57,7 @@ bool g_bClose = false;
 bool g_bHasPrevViewProj = false;
 bool g_bMotionBlurEnabled = true;
 bool g_bApplyMotionBlurThisFrame = true;
+float g_fMotionBlurScaleThisFrame = kBlurScale;
 bool g_bTimerPeriodChanged = false;
 bool g_bCameraMouseReady = false;
 
@@ -643,7 +645,7 @@ void RenderPass2()
     hResult = g_pEffect2->SetTexture("depthTexture", g_pRenderTarget2);              assert(hResult == S_OK);
     hResult = g_pEffect2->SetMatrix("g_matInvCurrentViewProj", &g_matInvCurrentViewProj); assert(hResult == S_OK);
     hResult = g_pEffect2->SetMatrix("g_matPrevViewProj", &g_matPrevViewProj);        assert(hResult == S_OK);
-    hResult = g_pEffect2->SetFloat("g_fBlurScale", kBlurScale);                      assert(hResult == S_OK);
+    hResult = g_pEffect2->SetFloat("g_fBlurScale", g_fMotionBlurScaleThisFrame);     assert(hResult == S_OK);
     hResult = g_pEffect2->SetFloat("g_fMaxBlurPixels", kMaxBlurPixels);              assert(hResult == S_OK);
     hResult = g_pEffect2->SetVector("g_vTexelSize", &texelSize);                     assert(hResult == S_OK);
     hResult = g_pEffect2->SetInt("g_iDebugViewMode", kDebugViewMode);                assert(hResult == S_OK);
@@ -830,12 +832,21 @@ void UpdateCamera(D3DXVECTOR3& eye,
     const float yawMotion = g_fCameraYaw - oldCameraYaw;
     const float pitchMotion = g_fCameraPitch - oldCameraPitch;
     const float distanceMotion = g_fCameraDistance - oldCameraDistance;
-    const float translationMotion = D3DXVec3Length(&motionVector);
+    const float targetTranslationMotion = D3DXVec3Length(&targetMotion);
+    const float zoomMotion = fabsf(distanceMotion);
+    const float translationMotion = max(targetTranslationMotion, zoomMotion);
     const float rotationMotion = max(fabsf(yawMotion), fabsf(pitchMotion));
+    const bool hasTranslationMotion = (translationMotion > kMotionBlurTranslationThreshold);
+    const bool hasRotationMotion = (rotationMotion > kMotionBlurRotationThreshold);
 
     g_bApplyMotionBlurThisFrame =
-        (translationMotion > kMotionBlurTranslationThreshold) ||
-        (rotationMotion > kMotionBlurRotationThreshold);
+        hasTranslationMotion || hasRotationMotion;
+
+    g_fMotionBlurScaleThisFrame = kBlurScale;
+    if (!hasTranslationMotion && hasRotationMotion)
+    {
+        g_fMotionBlurScaleThisFrame *= kRotationOnlyBlurScale;
+    }
 
     eye = g_vCameraEye;
     const D3DXVECTOR3 prevTarget = g_vCameraTarget - targetMotion * motionScale;

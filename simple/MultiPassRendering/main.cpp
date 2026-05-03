@@ -22,12 +22,13 @@ static const UINT kScreenHeight = 900;
 static const int kGridCountPerAxis = 6;
 static const float kGridSpacing = 10.0f;
 static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGridSpacing * 0.5f;
-static const float kCameraMoveSpeed = 35.0f;
+static const float kCameraMoveSpeed = 15.0f;
 static const float kCameraMouseSensitivity = 0.0025f;
 static const float kCameraPitchLimit = D3DX_PI * 0.49f;
+static const float kMotionVectorFrameSeconds = 1.0f / 60.0f;
 static const float kBlurScale = 2.0f;
 static const float kMaxBlurPixels = 240.0f;
-static const int kDebugViewMode = 2;
+static const int kDebugViewMode = 0;
 
 HWND g_hWnd = NULL;
 LPDIRECT3D9 g_pD3D = NULL;
@@ -79,7 +80,10 @@ static void Cleanup();
 static void RenderPass1();
 static void RenderPass2();
 static void DrawFullscreenQuad();
-static void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at);
+static void UpdateCamera(D3DXVECTOR3& eye,
+                         D3DXVECTOR3& at,
+                         D3DXVECTOR3& prevEye,
+                         D3DXVECTOR3& prevAt);
 static void ResetCameraMouse();
 static float UpdateFps();
 
@@ -426,7 +430,7 @@ void RenderPass1()
     hResult = g_pd3dDevice->SetRenderTarget(0, pRT0); assert(hResult == S_OK);
     hResult = g_pd3dDevice->SetRenderTarget(1, pRT1); assert(hResult == S_OK);
 
-    D3DXMATRIX View, Proj;
+    D3DXMATRIX View, PrevView, Proj;
 
     D3DXMatrixPerspectiveFovLH(&Proj,
                                D3DXToRadian(60.0f),
@@ -436,12 +440,16 @@ void RenderPass1()
 
     D3DXVECTOR3 eye;
     D3DXVECTOR3 at;
+    D3DXVECTOR3 prevEye;
+    D3DXVECTOR3 prevAt;
     D3DXVECTOR3 up(0.0f, 1.0f, 0.0f);
-    UpdateCamera(eye, at);
+    UpdateCamera(eye, at, prevEye, prevAt);
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
+    D3DXMatrixLookAtLH(&PrevView, &prevEye, &prevAt, &up);
 
     // 現在フレームの ViewProjection とその逆行列を更新する。
     g_matCurrentViewProj = View * Proj;
+    g_matPrevViewProj = PrevView * Proj;
 
     D3DXMATRIX matIdentity;
     D3DXMatrixIdentity(&matIdentity);
@@ -586,8 +594,6 @@ void RenderPass2()
     hResult = g_pd3dDevice->EndScene();  assert(hResult == S_OK);
     hResult = g_pd3dDevice->Present(NULL, NULL, NULL, NULL); assert(hResult == S_OK);
 
-    // 1フレームの描画完了後に prev=current へ更新する。
-    g_matPrevViewProj = g_matCurrentViewProj;
     g_bHasPrevViewProj = true;
 
     hResult = g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
@@ -610,7 +616,10 @@ void DrawFullscreenQuad()
     g_pd3dDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(QuadVertex));
 }
 
-void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
+void UpdateCamera(D3DXVECTOR3& eye,
+                  D3DXVECTOR3& at,
+                  D3DXVECTOR3& prevEye,
+                  D3DXVECTOR3& prevAt)
 {
     static ULONGLONG s_prevTick = GetTickCount64();
 
@@ -622,6 +631,10 @@ void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
     {
         deltaSeconds = 0.1f;
     }
+
+    const D3DXVECTOR3 oldCameraEye = g_vCameraEye;
+    const float oldCameraYaw = g_fCameraYaw;
+    const float oldCameraPitch = g_fCameraPitch;
 
     if (g_hWnd != NULL && GetForegroundWindow() == g_hWnd)
     {
@@ -697,8 +710,23 @@ void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
         g_vCameraEye += move * (kCameraMoveSpeed * deltaSeconds);
     }
 
+    const float motionScale = min(1.0f, kMotionVectorFrameSeconds / max(deltaSeconds, 0.0001f));
+    const D3DXVECTOR3 motionVector = g_vCameraEye - oldCameraEye;
+    const float yawMotion = g_fCameraYaw - oldCameraYaw;
+    const float pitchMotion = g_fCameraPitch - oldCameraPitch;
+
     eye = g_vCameraEye;
+    prevEye = g_vCameraEye - motionVector * motionScale;
+
+    const float prevYaw = g_fCameraYaw - yawMotion * motionScale;
+    const float prevPitch = g_fCameraPitch - pitchMotion * motionScale;
+    D3DXVECTOR3 prevForward(cosf(prevPitch) * sinf(prevYaw),
+                            -sinf(prevPitch),
+                            cosf(prevPitch) * cosf(prevYaw));
+    D3DXVec3Normalize(&prevForward, &prevForward);
+
     at = eye + forward;
+    prevAt = prevEye + prevForward;
 }
 
 void ResetCameraMouse()

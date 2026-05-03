@@ -25,6 +25,8 @@ static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGrid
 static const float kCameraMoveSpeed = 15.0f;
 static const float kCameraMouseSensitivity = 0.0025f;
 static const float kCameraPitchLimit = D3DX_PI * 0.49f;
+static const float kCameraMinDistance = 5.0f;
+static const float kCameraMaxDistance = 120.0f;
 static const float kMotionVectorFrameSeconds = 1.0f / 60.0f;
 static const float kBlurScale = 2.0f;
 static const float kMaxBlurPixels = 240.0f;
@@ -58,8 +60,10 @@ bool g_bTimerPeriodChanged = false;
 bool g_bCameraMouseReady = false;
 
 D3DXVECTOR3 g_vCameraEye(0.0f, 0.0f, -25.0f);
+D3DXVECTOR3 g_vCameraTarget(0.0f, 0.0f, 0.0f);
 float g_fCameraYaw = 0.0f;
 float g_fCameraPitch = 0.0f;
+float g_fCameraDistance = 25.0f;
 
 // カメラモーションブラー用の行列を保持する。
 D3DXMATRIX g_matCurrentViewProj;
@@ -712,8 +716,10 @@ void UpdateCamera(D3DXVECTOR3& eye,
     }
 
     const D3DXVECTOR3 oldCameraEye = g_vCameraEye;
+    const D3DXVECTOR3 oldCameraTarget = g_vCameraTarget;
     const float oldCameraYaw = g_fCameraYaw;
     const float oldCameraPitch = g_fCameraPitch;
+    const float oldCameraDistance = g_fCameraDistance;
 
     if (g_hWnd != NULL && GetForegroundWindow() == g_hWnd)
     {
@@ -762,37 +768,68 @@ void UpdateCamera(D3DXVECTOR3& eye,
                         cosf(g_fCameraPitch) * cosf(g_fCameraYaw));
     D3DXVec3Normalize(&forward, &forward);
 
-    D3DXVECTOR3 right(cosf(g_fCameraYaw), 0.0f, -sinf(g_fCameraYaw));
+    D3DXVECTOR3 orbitForward(forward.x, 0.0f, forward.z);
+    if (D3DXVec3LengthSq(&orbitForward) > 0.0f)
+    {
+        D3DXVec3Normalize(&orbitForward, &orbitForward);
+    }
+    else
+    {
+        orbitForward = D3DXVECTOR3(0.0f, 0.0f, 1.0f);
+    }
+
+    D3DXVECTOR3 right(orbitForward.z, 0.0f, -orbitForward.x);
     D3DXVec3Normalize(&right, &right);
 
-    D3DXVECTOR3 move(0.0f, 0.0f, 0.0f);
+    D3DXVECTOR3 targetMove(0.0f, 0.0f, 0.0f);
     if (GetAsyncKeyState('W') & 0x8000)
     {
-        move += forward;
+        g_fCameraDistance -= kCameraMoveSpeed * deltaSeconds;
     }
     if (GetAsyncKeyState('S') & 0x8000)
     {
-        move -= forward;
+        g_fCameraDistance += kCameraMoveSpeed * deltaSeconds;
     }
     if (GetAsyncKeyState('D') & 0x8000)
     {
-        move += right;
+        targetMove += right;
     }
     if (GetAsyncKeyState('A') & 0x8000)
     {
-        move -= right;
+        targetMove -= right;
+    }
+    if (GetAsyncKeyState('E') & 0x8000)
+    {
+        targetMove += orbitForward;
+    }
+    if (GetAsyncKeyState('Q') & 0x8000)
+    {
+        targetMove -= orbitForward;
     }
 
-    if (D3DXVec3LengthSq(&move) > 0.0f)
+    if (g_fCameraDistance < kCameraMinDistance)
     {
-        D3DXVec3Normalize(&move, &move);
-        g_vCameraEye += move * (kCameraMoveSpeed * deltaSeconds);
+        g_fCameraDistance = kCameraMinDistance;
     }
+    else if (g_fCameraDistance > kCameraMaxDistance)
+    {
+        g_fCameraDistance = kCameraMaxDistance;
+    }
+
+    if (D3DXVec3LengthSq(&targetMove) > 0.0f)
+    {
+        D3DXVec3Normalize(&targetMove, &targetMove);
+        g_vCameraTarget += targetMove * (kCameraMoveSpeed * deltaSeconds);
+    }
+
+    g_vCameraEye = g_vCameraTarget - forward * g_fCameraDistance;
 
     const float motionScale = min(1.0f, kMotionVectorFrameSeconds / max(deltaSeconds, 0.0001f));
     const D3DXVECTOR3 motionVector = g_vCameraEye - oldCameraEye;
+    const D3DXVECTOR3 targetMotion = g_vCameraTarget - oldCameraTarget;
     const float yawMotion = g_fCameraYaw - oldCameraYaw;
     const float pitchMotion = g_fCameraPitch - oldCameraPitch;
+    const float distanceMotion = g_fCameraDistance - oldCameraDistance;
     const float translationMotion = D3DXVec3Length(&motionVector);
     const float rotationMotion = max(fabsf(yawMotion), fabsf(pitchMotion));
 
@@ -801,7 +838,8 @@ void UpdateCamera(D3DXVECTOR3& eye,
         (rotationMotion > kMotionBlurRotationThreshold);
 
     eye = g_vCameraEye;
-    prevEye = g_vCameraEye - motionVector * motionScale;
+    const D3DXVECTOR3 prevTarget = g_vCameraTarget - targetMotion * motionScale;
+    const float prevDistance = g_fCameraDistance - distanceMotion * motionScale;
 
     const float prevYaw = g_fCameraYaw - yawMotion * motionScale;
     const float prevPitch = g_fCameraPitch - pitchMotion * motionScale;
@@ -810,8 +848,9 @@ void UpdateCamera(D3DXVECTOR3& eye,
                             cosf(prevPitch) * cosf(prevYaw));
     D3DXVec3Normalize(&prevForward, &prevForward);
 
-    at = eye + forward;
-    prevAt = prevEye + prevForward;
+    prevEye = prevTarget - prevForward * prevDistance;
+    at = g_vCameraTarget;
+    prevAt = prevTarget;
 }
 
 void ResetCameraMouse()

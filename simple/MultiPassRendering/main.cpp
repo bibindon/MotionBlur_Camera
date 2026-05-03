@@ -22,13 +22,14 @@ static const UINT kScreenHeight = 900;
 static const int kGridCountPerAxis = 6;
 static const float kGridSpacing = 10.0f;
 static const float kGridOriginOffset = ((float)kGridCountPerAxis - 1.0f) * kGridSpacing * 0.5f;
-static const float kCameraRotateDuration = 4.0f;
-static const float kCameraMoveDuration = 6.0f;
-static const float kCameraTravelDistance = 50.0f;
+static const float kCameraMoveSpeed = 35.0f;
+static const float kCameraMouseSensitivity = 0.0025f;
+static const float kCameraPitchLimit = D3DX_PI * 0.49f;
 static const float kBlurScale = 2.0f;
 static const float kMaxBlurPixels = 240.0f;
-static const int kDebugViewMode = 0;
+static const int kDebugViewMode = 2;
 
+HWND g_hWnd = NULL;
 LPDIRECT3D9 g_pD3D = NULL;
 LPDIRECT3DDEVICE9 g_pd3dDevice = NULL;
 LPD3DXFONT g_pFont = NULL;
@@ -47,6 +48,11 @@ bool g_bClose = false;
 bool g_bHasPrevViewProj = false;
 bool g_bMotionBlurEnabled = true;
 bool g_bTimerPeriodChanged = false;
+bool g_bCameraMouseReady = false;
+
+D3DXVECTOR3 g_vCameraEye(0.0f, 0.0f, -25.0f);
+float g_fCameraYaw = 0.0f;
+float g_fCameraPitch = 0.0f;
 
 // カメラモーションブラー用の行列を保持する。
 D3DXMATRIX g_matCurrentViewProj;
@@ -74,9 +80,8 @@ static void RenderPass1();
 static void RenderPass2();
 static void DrawFullscreenQuad();
 static void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at);
+static void ResetCameraMouse();
 static float UpdateFps();
-static float Lerp(float a, float b, float t);
-static float SmoothStep(float t);
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -130,6 +135,7 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
                              NULL,
                              wc.hInstance,
                              NULL);
+    g_hWnd = hWnd;
 
     InitD3D(hWnd);
     ShowWindow(hWnd, SW_SHOWDEFAULT);
@@ -145,7 +151,7 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
         }
         else
         {
-            Sleep(16);
+            Sleep(15);
 
             RenderPass1();
             RenderPass2();
@@ -607,7 +613,6 @@ void DrawFullscreenQuad()
 void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
 {
     static ULONGLONG s_prevTick = GetTickCount64();
-    static float s_elapsed = 0.0f;
 
     const ULONGLONG currentTick = GetTickCount64();
     float deltaSeconds = static_cast<float>(currentTick - s_prevTick) / 1000.0f;
@@ -618,47 +623,91 @@ void UpdateCamera(D3DXVECTOR3& eye, D3DXVECTOR3& at)
         deltaSeconds = 0.1f;
     }
 
-    const float cycleDuration =
-        kCameraRotateDuration +
-        kCameraMoveDuration +
-        kCameraMoveDuration;
-
-    s_elapsed += deltaSeconds;
-    while (s_elapsed >= cycleDuration)
+    if (g_hWnd != NULL && GetForegroundWindow() == g_hWnd)
     {
-        s_elapsed -= cycleDuration;
-    }
+        POINT center;
+        RECT clientRect;
+        GetClientRect(g_hWnd, &clientRect);
+        center.x = (clientRect.left + clientRect.right) / 2;
+        center.y = (clientRect.top + clientRect.bottom) / 2;
+        ClientToScreen(g_hWnd, &center);
 
-    const D3DXVECTOR3 startPos(0.0f, 0.0f, -25.0f);
-    const float startYaw = 0.0f;
-    const D3DXVECTOR3 startForward(sinf(startYaw), 0.0f, cosf(startYaw));
-    const D3DXVECTOR3 turnPoint = startPos + startForward * kCameraTravelDistance;
+        if (!g_bCameraMouseReady)
+        {
+            SetCursorPos(center.x, center.y);
+            ShowCursor(FALSE);
+            g_bCameraMouseReady = true;
+        }
+        else
+        {
+            POINT current;
+            GetCursorPos(&current);
+            const int dx = current.x - center.x;
+            const int dy = current.y - center.y;
 
-    float yaw = startYaw;
-    float time = s_elapsed;
+            g_fCameraYaw += static_cast<float>(dx) * kCameraMouseSensitivity;
+            g_fCameraPitch += static_cast<float>(dy) * kCameraMouseSensitivity;
 
-    if (time < kCameraRotateDuration)
-    {
-        const float t = SmoothStep(time / kCameraRotateDuration);
-        yaw = Lerp(startYaw, startYaw + D3DX_PI * 2.0f, t);
-        eye = startPos;
-    }
-    else if ((time -= kCameraRotateDuration) < kCameraMoveDuration)
-    {
-        const float t = SmoothStep(time / kCameraMoveDuration);
-        yaw = startYaw;
-        eye = startPos + startForward * (kCameraTravelDistance * t);
+            if (g_fCameraPitch < -kCameraPitchLimit)
+            {
+                g_fCameraPitch = -kCameraPitchLimit;
+            }
+            else if (g_fCameraPitch > kCameraPitchLimit)
+            {
+                g_fCameraPitch = kCameraPitchLimit;
+            }
+
+            SetCursorPos(center.x, center.y);
+        }
     }
     else
     {
-        time -= kCameraMoveDuration;
-        const float t = SmoothStep(time / kCameraMoveDuration);
-        yaw = startYaw;
-        eye = turnPoint - startForward * (kCameraTravelDistance * t);
+        ResetCameraMouse();
     }
 
-    const D3DXVECTOR3 forward(sinf(yaw), 0.0f, cosf(yaw));
+    D3DXVECTOR3 forward(cosf(g_fCameraPitch) * sinf(g_fCameraYaw),
+                        -sinf(g_fCameraPitch),
+                        cosf(g_fCameraPitch) * cosf(g_fCameraYaw));
+    D3DXVec3Normalize(&forward, &forward);
+
+    D3DXVECTOR3 right(cosf(g_fCameraYaw), 0.0f, -sinf(g_fCameraYaw));
+    D3DXVec3Normalize(&right, &right);
+
+    D3DXVECTOR3 move(0.0f, 0.0f, 0.0f);
+    if (GetAsyncKeyState('W') & 0x8000)
+    {
+        move += forward;
+    }
+    if (GetAsyncKeyState('S') & 0x8000)
+    {
+        move -= forward;
+    }
+    if (GetAsyncKeyState('D') & 0x8000)
+    {
+        move += right;
+    }
+    if (GetAsyncKeyState('A') & 0x8000)
+    {
+        move -= right;
+    }
+
+    if (D3DXVec3LengthSq(&move) > 0.0f)
+    {
+        D3DXVec3Normalize(&move, &move);
+        g_vCameraEye += move * (kCameraMoveSpeed * deltaSeconds);
+    }
+
+    eye = g_vCameraEye;
     at = eye + forward;
+}
+
+void ResetCameraMouse()
+{
+    if (g_bCameraMouseReady)
+    {
+        ShowCursor(TRUE);
+        g_bCameraMouseReady = false;
+    }
 }
 
 float UpdateFps()
@@ -685,25 +734,6 @@ float UpdateFps()
     return s_fps;
 }
 
-float Lerp(float a, float b, float t)
-{
-    return a + (b - a) * t;
-}
-
-float SmoothStep(float t)
-{
-    if (t < 0.0f)
-    {
-        t = 0.0f;
-    }
-    else if (t > 1.0f)
-    {
-        t = 1.0f;
-    }
-
-    return t * t * (3.0f - 2.0f * t);
-}
-
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -720,6 +750,7 @@ LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_DESTROY:
     {
+        ResetCameraMouse();
         PostQuitMessage(0);
         g_bClose = true;
         return 0;

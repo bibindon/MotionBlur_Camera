@@ -20,8 +20,8 @@ sampler colorSampler = sampler_state
 sampler colorLinearSampler = sampler_state
 {
     Texture = (texture1);
-    MinFilter = LINEAR;
-    MagFilter = LINEAR;
+    MinFilter = NONE;
+    MagFilter = NONE;
     MipFilter = NONE;
     AddressU = CLAMP;
     AddressV = CLAMP;
@@ -31,8 +31,8 @@ texture depthTexture;
 sampler depthSampler = sampler_state
 {
     Texture = (depthTexture);
-    MinFilter = POINT;
-    MagFilter = POINT;
+    MinFilter = NONE;
+    MagFilter = NONE;
     MipFilter = NONE;
     AddressU = CLAMP;
     AddressV = CLAMP;
@@ -112,38 +112,53 @@ float4 SampleMotionBlur(float2 uv, float2 velocity)
 void PixelShader1(in float2 inTexCoord : TEXCOORD0,
                   out float4 outColor  : COLOR0)
 {
-    float depth = tex2D(depthSampler, inTexCoord).r;
-    float2 velocity = GetVelocity(inTexCoord, depth);
+    float2 sampleUv = inTexCoord;
+    if (true)
+    {
+        sampleUv = saturate(sampleUv + g_vTexelSize.xy * 0.5f);
+    }
+
+    float depth = tex2D(depthSampler, sampleUv).r;
+    float2 velocity = GetVelocity(sampleUv, depth);
+    float4 finalColor = 0.0f;
 
     if (g_iDebugViewMode == 1)
     {
-        outColor = float4(depth, depth, depth, 1.0f);
-        return;
+        finalColor = float4(depth, depth, depth, 1.0f);
     }
-
-    if (g_iDebugViewMode == 2)
+    else if (g_iDebugViewMode == 2)
     {
         float2 velocityVis = velocity * 4.0f;
-        outColor = float4(velocityVis.x * 0.5f + 0.5f,
-                          velocityVis.y * 0.5f + 0.5f,
-                          0.5f,
-                          1.0f);
-        return;
+        finalColor = float4(velocityVis.x * 0.5f + 0.5f,
+                            velocityVis.y * 0.5f + 0.5f,
+                            0.5f,
+                            1.0f);
     }
-
-    if (g_iDebugViewMode == 3)
+    else if (g_iDebugViewMode == 3)
     {
-        outColor = tex2D(colorSampler, inTexCoord);
-        return;
+        finalColor = tex2D(colorSampler, sampleUv);
     }
-
-    if (g_iMotionBlurEnabled == 0)
+    else if (g_iMotionBlurEnabled == 0)
     {
-        outColor = tex2D(colorSampler, inTexCoord);
-        return;
+        finalColor = tex2D(colorSampler, sampleUv);
+    }
+    else
+    {
+        finalColor = SampleMotionBlur(sampleUv, velocity);
     }
 
-    outColor = SampleMotionBlur(inTexCoord, velocity);
+    if (false)
+    {
+        float2 pixelCoord = floor(sampleUv * g_vTexelSize.zw);
+        float gridX = fmod(pixelCoord.x, 5.0f);
+        float gridY = fmod(pixelCoord.y, 5.0f);
+        if (gridX == 0.0f || gridY == 0.0f)
+        {
+            finalColor = float4(0.0f, 1.0f, 0.0f, 1.0f);
+        }
+    }
+
+    outColor = finalColor;
 }
 
 technique Technique1

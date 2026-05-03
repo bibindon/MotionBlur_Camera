@@ -17,6 +17,16 @@ sampler colorSampler = sampler_state
     AddressV = CLAMP;
 };
 
+sampler colorLinearSampler = sampler_state
+{
+    Texture = (texture1);
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = NONE;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+};
+
 texture depthTexture;
 sampler depthSampler = sampler_state
 {
@@ -39,7 +49,7 @@ void VertexShader1(in  float4 inPosition  : POSITION,
 
 float2 GetPrevUv(float2 uv, float depth)
 {
-    // 現在フレームの UV と深度から近似的にワールド座標を復元する。
+    // Reconstruct an approximate world position from the current UV and depth.
     float4 currentClip;
     currentClip.x = uv.x * 2.0f - 1.0f;
     currentClip.y = (1.0f - uv.y) * 2.0f - 1.0f;
@@ -50,7 +60,7 @@ float2 GetPrevUv(float2 uv, float depth)
     float invWorldW = 1.0f / max(abs(worldPos.w), 0.0001f);
     worldPos *= invWorldW;
 
-    // 前フレームの ViewProjection へ投影し直して前回 UV を求める。
+    // Reproject into the previous frame to recover the previous UV.
     float4 prevClip = mul(worldPos, g_matPrevViewProj);
     float invPrevW = 1.0f / max(abs(prevClip.w), 0.0001f);
     prevClip *= invPrevW;
@@ -84,19 +94,23 @@ float2 GetVelocity(float2 uv, float depth)
 
 float4 SampleMotionBlur(float2 uv, float2 velocity)
 {
-    // 現在位置から過去方向へ 8 サンプル取って平均する。
+    // Gather 21 samples along the motion direction and blend them with Gaussian weights.
     float4 accumColor = 0.0f;
-    const int sampleCount = 8;
+    float accumWeight = 0.0f;
+    const int sampleCount = 21;
+    const float sigma = 0.35f;
 
     [unroll]
     for (int i = 0; i < sampleCount; ++i)
     {
-        float t = (float)i / (float)(sampleCount - 1);
-        float2 sampleUv = uv - velocity * t;
-        accumColor += tex2D(colorSampler, sampleUv);
+        float t = ((float)i / (float)(sampleCount - 1)) * 2.0f - 1.0f;
+        float weight = exp(-(t * t) / (2.0f * sigma * sigma));
+        float2 sampleUv = saturate(uv - velocity * t);
+        accumColor += tex2D(colorLinearSampler, sampleUv) * weight;
+        accumWeight += weight;
     }
 
-    return accumColor / (float)sampleCount;
+    return accumColor / max(accumWeight, 0.0001f);
 }
 
 void PixelShader1(in float2 inTexCoord : TEXCOORD0,

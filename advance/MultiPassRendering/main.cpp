@@ -27,8 +27,9 @@ static const float kCameraMouseSensitivity = 0.0025f;
 static const float kCameraPitchLimit = D3DX_PI * 0.49f;
 static const float kMotionVectorFrameSeconds = 1.0f / 60.0f;
 static const float kBlurScale = 2.0f;
-static const float kMaxBlurPixels = 240.0f;
+static const float kMaxBlurPixels = 120.0f;
 static const int kDebugViewMode = 0;
+static const float kBackdropCubeSize = 200.0f;
 
 HWND g_hWnd = NULL;
 LPDIRECT3D9 g_pD3D = NULL;
@@ -36,6 +37,8 @@ LPDIRECT3DDEVICE9 g_pd3dDevice = NULL;
 LPD3DXFONT g_pFont = NULL;
 LPD3DXFONT g_pLargeFont = NULL;
 LPD3DXMESH g_pMesh = NULL;
+LPD3DXMESH g_pBackdropCube = NULL;
+LPDIRECT3DTEXTURE9 g_pBackdropTexture = NULL;
 
 LPD3DXMESH g_pMeshSphere = NULL;
 
@@ -80,6 +83,7 @@ static void Cleanup();
 static void RenderPass1();
 static void RenderPass2();
 static void DrawFullscreenQuad();
+static void ReverseMeshWinding(LPD3DXMESH pMesh);
 static void UpdateCamera(D3DXVECTOR3& eye,
                          D3DXVECTOR3& at,
                          D3DXVECTOR3& prevEye,
@@ -338,6 +342,20 @@ void InitD3D(HWND hWnd)
                                NULL);
     assert(hResult == S_OK);
 
+    hResult = D3DXCreateBox(g_pd3dDevice,
+                            kBackdropCubeSize,
+                            kBackdropCubeSize,
+                            kBackdropCubeSize,
+                            &g_pBackdropCube,
+                            NULL);
+    assert(hResult == S_OK);
+    ReverseMeshWinding(g_pBackdropCube);
+
+    hResult = D3DXCreateTextureFromFile(g_pd3dDevice,
+                                        _T("backdrop4x4.bmp"),
+                                        &g_pBackdropTexture);
+    assert(hResult == S_OK);
+
     // === 変更: RT を 2 枚作成（両方 A8R8G8B8） ===
     hResult = D3DXCreateTexture(g_pd3dDevice,
                                 kScreenWidth, kScreenHeight,
@@ -381,6 +399,8 @@ void Cleanup()
     }
 
     SAFE_RELEASE(g_pMesh);
+    SAFE_RELEASE(g_pBackdropCube);
+    SAFE_RELEASE(g_pBackdropTexture);
     SAFE_RELEASE(g_pMeshSphere);
     SAFE_RELEASE(g_pEffect1);
     SAFE_RELEASE(g_pEffect2);
@@ -393,6 +413,49 @@ void Cleanup()
     SAFE_RELEASE(g_pQuadDecl);
     SAFE_RELEASE(g_pd3dDevice);
     SAFE_RELEASE(g_pD3D);
+}
+
+void ReverseMeshWinding(LPD3DXMESH pMesh)
+{
+    assert(pMesh != NULL);
+
+    const DWORD faceCount = pMesh->GetNumFaces();
+    HRESULT hResult = E_FAIL;
+
+    if ((pMesh->GetOptions() & D3DXMESH_32BIT) != 0)
+    {
+        DWORD* indices = NULL;
+        hResult = pMesh->LockIndexBuffer(0, reinterpret_cast<void**>(&indices));
+        assert(hResult == S_OK);
+
+        for (DWORD faceIndex = 0; faceIndex < faceCount; ++faceIndex)
+        {
+            DWORD* face = &indices[faceIndex * 3];
+            const DWORD temp = face[1];
+            face[1] = face[2];
+            face[2] = temp;
+        }
+
+        hResult = pMesh->UnlockIndexBuffer();
+        assert(hResult == S_OK);
+    }
+    else
+    {
+        WORD* indices = NULL;
+        hResult = pMesh->LockIndexBuffer(0, reinterpret_cast<void**>(&indices));
+        assert(hResult == S_OK);
+
+        for (DWORD faceIndex = 0; faceIndex < faceCount; ++faceIndex)
+        {
+            WORD* face = &indices[faceIndex * 3];
+            const WORD temp = face[1];
+            face[1] = face[2];
+            face[2] = temp;
+        }
+
+        hResult = pMesh->UnlockIndexBuffer();
+        assert(hResult == S_OK);
+    }
 }
 
 void RenderPass1()
@@ -484,6 +547,17 @@ void RenderPass1()
     UINT numPass = 0;
     hResult = g_pEffect1->Begin(&numPass, 0); assert(hResult == S_OK);
     hResult = g_pEffect1->BeginPass(0);       assert(hResult == S_OK);
+
+    D3DXMATRIX backdropWorld;
+    D3DXMATRIX backdropWorldViewProj;
+    D3DXMatrixIdentity(&backdropWorld);
+    backdropWorldViewProj = backdropWorld * g_matCurrentViewProj;
+
+    hResult = g_pEffect1->SetBool("g_bUseTexture", TRUE);                           assert(hResult == S_OK);
+    hResult = g_pEffect1->SetTexture("texture1", g_pBackdropTexture);               assert(hResult == S_OK);
+    hResult = g_pEffect1->SetMatrix("g_matWorldViewProj", &backdropWorldViewProj);  assert(hResult == S_OK);
+    hResult = g_pEffect1->CommitChanges();                                          assert(hResult == S_OK);
+    hResult = g_pBackdropCube->DrawSubset(0);                                       assert(hResult == S_OK);
 
     // 10m 間隔で 10x10x10 個並べたモデル群
     hResult = g_pEffect1->SetBool("g_bUseTexture", TRUE); assert(hResult == S_OK);
